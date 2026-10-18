@@ -372,23 +372,12 @@ char checkLignePleineGameZone(void)
 }
 
 // Renvoie OK si pas de collision au nouvelle coordonnées ou nouvelle rotation
+extern char collide(byte *piece,char lig,char col); // smooth.s
+
 char checkCollide(char playerNextLig,char playerNextCol,char playerNextRot)
 {
-	int x,y;
-	
-	for (x=0;x<5;x++)
-	for (y=0;y<5;y++)
-	{
-		// On parcoure la matrice de notre pièce à la recherche d'un morceau de la pièce
-		if (peekPlayerPiece(playerNextRot,x,y)!=0)
-		{
-			// Si à l'endroit de ce morceau à afficher il y à quelque
-			if (peekGameZone(playerNextCol+x,playerNextLig+y)!=0) return NOK;
-		}
-		
-	}
-	
-	return OK;
+	// Même règle qu'avant (hors zone = collision), en assembleur pour la vitesse
+	return collide(&player.piece[playerNextRot][0][0],playerNextLig,playerNextCol);
 }
 
 // Laisse la brique du joueur dans la gameZone
@@ -551,18 +540,132 @@ void copyPiece2Player()
 	
 }
 
-void renderPlayer()
-{	
-	int x,y;	
-	if (player.pieceRestante!=0)
-	for (x=0;x<5;x++)
-	for (y=0;y<5;y++)
+/*--------------------------------------------------------------------------------*/
+/*---------------------------- AFFICHAGE FLUIDE ----------------------------------*/
+/*--------------------------------------------------------------------------------*/
+/*
+	La logique du jeu reste en cases. Seul l'affichage de la pièce du joueur est
+	décalé :
+	- vers le bas de dy pixels (0..7), selon l'avancement de downTimer ;
+	- horizontalement de smoothOx pixels (-6..6, par pas de 2) : quand la pièce
+	  change de colonne, l'affichage part de l'ancienne colonne et la rejoint en
+	  quelques images.
+
+	Chaque case touchée par la pièce reçoit un caractère dynamique composé à partir
+	des blocs voisins (smooth.s). Le mélange horizontal de deux blocs est précalculé
+	dans smoothTable.c (tools/gen_smooth_table.py) ; le décalage vertical ne crée
+	aucun conflit de couleurs car en mode 2 la couleur est par ligne de 8 pixels.
+
+	Deux banques de caractères dynamiques sont utilisées en alternance : on écrit
+	les nouveaux motifs dans la banque qui n'est pas affichée, puis on bascule la
+	table des noms juste après le retour de trame (smoothCommit, fin de la boucle
+	principale). Seules les cases touchées sont mises à jour, dans la table affichée
+	(chrtab) et dans le tampon (buffer), sans passer par showBuffer().
+*/
+
+#define SMOOTHMAX 12   // Une pièce de 5 blocs décalée dans les deux sens touche au plus 12 cases
+#define SLIDEMAX   6   // Décalage horizontal maximal affiché (pixels)
+#define SLIDESTEP  2   // Pixels parcourus par image pendant le glissement
+
+extern void smooth_prepare(byte *piece,byte bx,byte py,byte dy,byte s,byte bank);
+extern void smooth_commit(void);
+extern byte smoothPending; // Un rendu préparé attend smooth_commit
+
+byte smoothBankIdx;
+byte smoothN;               // Nombre de cases actuellement occupées par la pièce à l'écran
+unsigned smoothCellOff[SMOOTHMAX]; // Ces cases, en décalage dans la table des noms (ligne*32+colonne)
+char smoothDy;              // Décalage vertical affiché
+char smoothOx;              // Décalage horizontal affiché
+char smoothLig,smoothCol,smoothRot; // Position affichée, smoothLig=-1 force le rendu
+char smoothCanFall;         // La case du dessous est libre (recalculé quand la pièce bouge)
+char smoothSlide;           // Colonne de départ du glissement : 0 occupée, 1 libre, 2 libre aussi une ligne plus bas
+
+char smoothComputeDy(void)
+{
+	byte e,dy,c;
+	
+	if (smoothCanFall!=OK) return 0;
+	c = currentDownTimer;
+	if ((char)c<=0) return 0;
+	if (downTimer>=currentDownTimer) return 0;
+	
+	// dy = (écoulé*8)/c, sans division (trop lente avec SDCC)
+	e = (c-downTimer)*8;
+	dy = 0;
+	while (e>=c) { e-=c; dy++; }
+	if (dy>7) dy=7;
+	return dy;
+}
+
+// force : 0 = seulement si quelque chose a bougé, la bascule attend smoothCommit()
+//         2 = rendu complet (le tampon vient d'être réécrit) : redessiner et basculer tout de suite
+void smoothUpdate(char force)
+{
+	char dy,bx,s,from;
+	
+	if (player.pieceRestante==0) return;
+	
+	if ((force!=0) || (player.lig!=smoothLig) || (player.col!=smoothCol) || (player.rot!=smoothRot))
 	{
-		if (player.piece[player.rot][x][y]!=0)
+		// Changement de colonne : l'affichage part de là où il était
+		if ((force==2) || (smoothLig<0) || (player.rot!=smoothRot)) smoothOx=0;
+		else
 		{
-			put_char(player.x+x,player.y+y,player.piece[player.rot][x][y]);			
+			smoothOx -= (player.col-smoothCol)*8;
+			if (smoothOx<-SLIDEMAX) smoothOx=-SLIDEMAX;
+			if (smoothOx>SLIDEMAX) smoothOx=SLIDEMAX;
 		}
+		smoothLig=player.lig;
+		smoothCol=player.col;
+		smoothRot=player.rot;
+		smoothCanFall = checkCollide(player.lig+1,player.col,player.rot);
+		// Pendant le glissement la pièce chevauche aussi la colonne d'où elle vient
+		smoothSlide = 0;
+		if (smoothOx!=0)
+		{
+			from = (smoothOx<0) ? player.col-1 : player.col+1;
+			if (checkCollide(player.lig,from,player.rot)==OK)
+			{
+				smoothSlide = 1;
+				if ((smoothCanFall==OK) && (checkCollide(player.lig+1,from,player.rot)==OK)) smoothSlide = 2;
+			}
+		}
+		if (force==0) force = 1;
 	}
+	else if (smoothOx!=0)
+	{
+		if (smoothOx<0) smoothOx+=SLIDESTEP; else smoothOx-=SLIDESTEP;
+		force = 1;
+	}
+	
+	dy = smoothComputeDy();
+	
+	// Si elle ne tient pas dans la colonne de départ (coin d'un obstacle), on la pose directement
+	if ((smoothOx!=0) && ((smoothSlide==0) || ((dy!=0) && (smoothSlide==1)))) smoothOx=0;
+	
+	if ((force==0) && (dy==smoothDy)) return;
+	smoothDy=dy;
+	
+	bx = player.x;
+	s = smoothOx;
+	if (s<0) { bx--; s+=8; }
+	s >>= 1;
+	
+	if ((dy!=0) || (s!=0)) smoothBankIdx ^= 1;
+	disable_nmi();
+	if (smoothPending) smooth_commit(); // ne devrait pas arriver : un rendu par image
+	smooth_prepare(&player.piece[player.rot][0][0],bx,player.y,dy,s,smoothBankIdx);
+	if (force==2) smooth_commit();
+	enable_nmi();
+}
+
+// Bascule un rendu préparé : à appeler juste après le retour de trame
+void smoothCommit(void)
+{
+	if (smoothPending==0) return;
+	disable_nmi();
+	smooth_commit();
+	enable_nmi();
 }
 
 void renderNextPiece()
@@ -699,6 +802,8 @@ char checkGameOver(void)
 
 void initPlayer(char reinit)
 {		
+	smoothLig=-1;
+	if (reinit==INIT) smoothN=0;
 	player.x = GAMEZONESTARTX + PLAYERSTARTX;     	
 	player.oldx = GAMEZONESTARTX + PLAYERSTARTX;
 	
@@ -1271,6 +1376,8 @@ void main(void)
 	maxRandom = 6;
 	workflow = MENU;
 	currentLevel=1;
+	smoothPending=0;
+	smoothN=0;
 
 	blastRadius = 0;
 	delaiToucheGauche=0;
@@ -1615,16 +1722,16 @@ void main(void)
 			
 			if (typectrl==TYPE1)
 			{
-				if  ((joypad_1 & FIRE1) && (delaiToucheFire1==0))  {playerRotate(HORAIRE);doRenderPlayer=OK;toucheRelachee=NOK;delaiToucheFire1=TOUCHEDELAI*2;stop_sound(2);play_sound(2);}     		  
-				if  ((joypad_1 & FIRE2) && (delaiToucheFire1==0))  {playerRotate(ANTIHORAIRE);doRenderPlayer=OK;toucheRelachee=NOK;delaiToucheFire1=TOUCHEDELAI*2;stop_sound(2);play_sound(2);}     		  
+				if  ((joypad_1 & FIRE1) && (delaiToucheFire1==0))  {playerRotate(HORAIRE);toucheRelachee=NOK;delaiToucheFire1=TOUCHEDELAI*2;stop_sound(2);play_sound(2);}     		  
+				if  ((joypad_1 & FIRE2) && (delaiToucheFire1==0))  {playerRotate(ANTIHORAIRE);toucheRelachee=NOK;delaiToucheFire1=TOUCHEDELAI*2;stop_sound(2);play_sound(2);}     		  
 			}
 			else
 			{
-				if  ((joypad_1 & FIRE2) && (delaiToucheFire1==0))  {playerRotate(HORAIRE);doRenderPlayer=OK;toucheRelachee=NOK;delaiToucheFire1=TOUCHEDELAI*2;stop_sound(2);play_sound(2);}     		  
-				if  ((joypad_1 & FIRE1) && (delaiToucheFire1==0))  {playerRotate(ANTIHORAIRE);doRenderPlayer=OK;toucheRelachee=NOK;delaiToucheFire1=TOUCHEDELAI*2;stop_sound(2);play_sound(2);}     		  			
+				if  ((joypad_1 & FIRE2) && (delaiToucheFire1==0))  {playerRotate(HORAIRE);toucheRelachee=NOK;delaiToucheFire1=TOUCHEDELAI*2;stop_sound(2);play_sound(2);}     		  
+				if  ((joypad_1 & FIRE1) && (delaiToucheFire1==0))  {playerRotate(ANTIHORAIRE);toucheRelachee=NOK;delaiToucheFire1=TOUCHEDELAI*2;stop_sound(2);play_sound(2);}     		  			
 			}
-			if ( (joypad_1 & RIGHT) && (delaiToucheDroite==0)) {movePlayerRight();doRenderPlayer=OK;delaiToucheDroite=TOUCHEDELAI;}
-			if ( (joypad_1 & LEFT)  && (delaiToucheGauche==0)) {movePlayerLeft();doRenderPlayer=OK;delaiToucheGauche=TOUCHEDELAI;}
+			if ( (joypad_1 & RIGHT) && (delaiToucheDroite==0)) {movePlayerRight();delaiToucheDroite=TOUCHEDELAI;}
+			if ( (joypad_1 & LEFT)  && (delaiToucheGauche==0)) {movePlayerLeft();delaiToucheGauche=TOUCHEDELAI;}
 			
 			if (keypad_1==10)
 			{
@@ -1647,7 +1754,14 @@ void main(void)
 			if (keypad_1==6) {currentLevel+=5;workflow=NEXTLEVEL;}*/
 			
 			
-			if (( (joypad_1 & DOWN)   || (downTimer==0) ) )
+			// Descente rapide : le minuteur de chute accélère (1 case toutes les 5 images
+			// environ, comme avant), l'affichage fluide reste continu
+			if (joypad_1 & DOWN)
+			{
+				k = (currentDownTimer+4)/5-1;
+				if (downTimer>k) downTimer-=k; else downTimer=0;
+			}
+			if (downTimer==0)
 			{  
 				if (movePlayerDown()==NOK) // On peut plus descendre on met dans la gameZone
 				{
@@ -1673,13 +1787,16 @@ void main(void)
 						doRenderPlayer=OK; 
 						doRenderNextPiece=OK;	                  	     				
 					}                         	     
-				}  else {doRenderPlayer=OK;doRenderNextPiece=OK;}   			     	
+				}   			     	
 				
 				toucheRelachee=NOK;		
 				
 				if (downTimer==0) downTimer = currentDownTimer;
 			}	
 		}
+
+		// Chute fluide : mise à jour de la pièce à chaque image
+		if ((workflow==INGAME) && (doRenderPlayer!=OK)) smoothUpdate(0);
 
 		/*--------------------------------------------------------------------------------*/
 		/*---------------------------- DETECT --------------------------------------------*/
@@ -1894,6 +2011,7 @@ void main(void)
 		
 	if ((doRenderGameZone==OK) || (doRenderPlayer==OK) || (doRenderNextPiece==OK))
 	{
+		smoothCommit();
 		disable_nmi();
 		renderGameZone(); 
 		enable_nmi();
@@ -1910,7 +2028,7 @@ void main(void)
 		if (doRenderPlayer==OK)
 		{
 			delay(1);
-			renderPlayer();                       
+			smoothUpdate(2);                       
 			doRenderPlayer=NOK;
 		}
 		//center_string(20,str(maxRandom));
@@ -1921,6 +2039,7 @@ void main(void)
 	}
 
 		delay(1);
+		smoothCommit(); // Chute fluide : bascule pendant le retour de trame
 	}
 	
 	pause();

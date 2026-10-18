@@ -25,6 +25,7 @@ del main.lst
 del main.sym
 del main.asm
 sdasz80 -o music.rel music.s
+sdasz80 -o smooth.rel smooth.s
 sdcc -mz80 -c --std-c99 --opt-code-speed pieceData.c
 del pieceData.lst
 del pieceData.sym
@@ -33,4 +34,8 @@ sdcc -mz80 -c --std-c99 --opt-code-speed Title.c
 del Title.lst
 del Title.sym
 del Title.asm
+sdcc -mz80 -c --std-c99 --opt-code-speed smoothTable.c
+del smoothTable.lst
+del smoothTable.sym
+del smoothTable.asm
 pause
