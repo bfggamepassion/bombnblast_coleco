@@ -1,0 +1,29 @@
+<h2>What's New in Version 2.0</h2>
+
+<p>Fifteen years after its release, <strong>Bomb'n Blast</strong> gets its biggest update yet: everything on screen now moves smoothly.</p>
+
+<h3>Smooth falling pieces</h3>
+<p>Pieces no longer jump down one block at a time. They now glide down <strong>pixel by pixel</strong>, at the same speed as before. Soft drop is smooth too.</p>
+
+<h3>Smooth sideways movement</h3>
+<p>Moving a piece left or right now makes it <strong>slide</strong> across instead of snapping to the next column. The slide takes just a few frames, so the controls stay as quick as ever.</p>
+
+<h3>More responsive controls</h3>
+<p>In earlier versions, every move and rotation redrew the whole screen. Now only the piece is updated, so moves and rotations show up right away.</p>
+
+<h3>Same game you know</h3>
+<p>The rules, levels, fall speeds and scoring are unchanged. Only the display is new.</p>
+
+<h3>Title screen</h3>
+<p>The opening screen now shows <strong>MICHEL LOUVET</strong>, replacing the old Collector Vision logo. The copyright line is replaced by a notice that this version is free.</p>
+
+<h3>Free game</h3>
+<p><strong>Version 2.0 of the game is free. No permission has been given to sell it as a physical release.</strong></p>
+
+<h3>Under the hood</h3>
+<ul>
+<li>A new display engine written in Z80 assembly redraws the falling piece every frame. The ColecoVision only allows 2 colors per 8-pixel line, so while a piece slides sideways a few edge pixels change color for a moment, and the piece looks exactly right again once it stops.</li>
+<li>Source code is available on <a href="https://github.com/bfggamepassion/bombnblast_coleco">GitHub</a>.</li>
+</ul>
+
+<p>Have fun, and let me know what you think!</p>

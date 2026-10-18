@@ -1,0 +1,16 @@
+<h2>What's New in Version 2.0a</h2>
+
+<p>A small maintenance update focused on <strong>real ColecoVision hardware</strong>. Gameplay is unchanged from version 2.0.</p>
+
+<h3>Safer on real consoles</h3>
+<ul>
+<li>The new smooth display engine now leaves the video chip more time between writes, so graphics updates stay reliable on a real TMS9918A video chip. Emulators don't enforce this limit, so the problem was invisible there.</li>
+<li>Fixed a rare issue, present since the original release, where loading the graphics on the menu screen could be interrupted by the video chip at a bad moment and scramble part of the video memory.</li>
+<li>More free memory for the system stack, for extra safety margin.</li>
+</ul>
+
+<h3>Ready for flash carts and EPROMs</h3>
+<p>The ROM file is now padded to exactly <strong>32 KB</strong>, the size most EPROM programmers and flash cartridges expect.</p>
+
+<h3>Free game</h3>
+<p><strong>Version 2.0a of the game is free. No permission has been given to sell it as a physical release.</strong></p>
