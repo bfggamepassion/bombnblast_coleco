@@ -1485,7 +1485,11 @@ void main(void)
 			stop_music();
 			currentLevel=1;
 			screen_off();
+			// NMI coupée pendant le chargement : la NMI lit le statut du VDP et
+			// désynchroniserait une adresse VRAM en cours d'écriture
+			disable_nmi();
 			loadPatternAndColor();
+			enable_nmi();
 			initLignePleineGameZone();
 			player.score=0;
 			delay(1);

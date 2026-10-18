@@ -48,6 +48,12 @@ MAXCELLS = 12		; SMOOTHMAX
 ;             puis numeros des blocs virtuels (gauche*3 + droite)
 ;   _buf+49 : liste d'ecritures pour smooth_commit : 3 octets par case
 ;             (decalage dans la table des noms lo/hi, caractere), 2*MAXCELLS max
+;   _buf+128: variables de travail de smooth_prepare (23 octets), en RAM de buf
+;             plutot qu'en variables globales pour laisser de la place a la pile :
+;             +128 banque, +130 base table, +132 ptr liste, +134 colonne,
+;             +136 decalage nom, +138 adresse VRAM, +140 bloc haut, +142 bloc bas,
+;             +144 nb cases, +145 colonne, +146 ligne, +147 haut, +148 bas,
+;             +149 caractere, +150 ligne ecran
 ; (pas d'equate sur _buf : le sdas de SDCC 3.0 genere alors de mauvaises relocations)
 
 	.area _CODE
@@ -74,7 +80,7 @@ _smooth_prepare:
 	;     retrouvent le contenu de la gameZone. Celles qui restent sous la piece
 	;     seront reecrites ensuite, pendant le meme retour de trame.
 	ld	hl,#_buf+49
-	ld	(sm_wlp),hl
+	ld	(_buf+132),hl
 	xor	a
 	ld	(sm_wln),a
 	ld	a,(_smoothN)
@@ -187,7 +193,7 @@ sp_nov:
 	jr	z,sp_bank0
 	ld	hl,#smooth_banks+MAXCELLS
 sp_bank0:
-	ld	(sm_bankp),hl
+	ld	(_buf+128),hl
 	ld	a,9 (ix)
 	add	a,a
 	add	a,a
@@ -197,19 +203,19 @@ sp_bank0:
 	ld	d,#0
 	ld	hl,#_smoothTable
 	add	hl,de
-	ld	(sm_tbase),hl
+	ld	(_buf+130),hl
 
 	; --- Parcours des cases : colonnes pc = 1..6, lignes pr = 1..6.
 	;     Case ecran (bx+pc-1, py+pr-1) : bloc virtuel du bas = V[pc][pr],
 	;     du haut = V[pc][pr-1] (ignore si dy=0).
 	xor	a
-	ld	(sm_n),a
+	ld	(_buf+144),a
 	ld	hl,#_buf+7
-	ld	(sm_colp),hl
+	ld	(_buf+134),hl
 	inc	a
-	ld	(sm_pc),a
+	ld	(_buf+145),a
 sp_col:
-	ld	hl,(sm_colp)		; colonne vide ?
+	ld	hl,(_buf+134)		; colonne vide ?
 	ld	b,#7
 	xor	a
 sp_orl:
@@ -219,15 +225,15 @@ sp_orl:
 	or	a
 	jp	z,sp_colnext
 	ld	a,#1
-	ld	(sm_pr),a
+	ld	(_buf+146),a
 sp_row:
-	ld	hl,(sm_colp)
-	ld	a,(sm_pr)
+	ld	hl,(_buf+134)
+	ld	a,(_buf+146)
 	ld	e,a
 	ld	d,#0
 	add	hl,de
 	ld	a,(hl)
-	ld	(sm_bot),a
+	ld	(_buf+148),a
 	dec	hl
 	ld	c,(hl)
 	ld	a,8 (ix)
@@ -236,18 +242,18 @@ sp_row:
 	ld	c,a
 sp_hasdy:
 	ld	a,c
-	ld	(sm_top),a
-	ld	hl,#sm_bot
+	ld	(_buf+147),a
+	ld	hl,#_buf+148
 	or	(hl)
 	jp	z,sp_next		; case vide
-	ld	a,(sm_n)
+	ld	a,(_buf+144)
 	cp	#MAXCELLS
 	jp	nc,sp_next		; securite : ne peut pas arriver
 	; decalage dans la table des noms = ligne*32 + colonne
-	ld	a,(sm_pr)
+	ld	a,(_buf+146)
 	dec	a
 	add	a,7 (ix)
-	ld	(sm_line),a
+	ld	(_buf+150),a
 	ld	l,a
 	ld	h,#0
 	add	hl,hl
@@ -255,101 +261,101 @@ sp_hasdy:
 	add	hl,hl
 	add	hl,hl
 	add	hl,hl
-	ld	a,(sm_pc)
+	ld	a,(_buf+145)
 	dec	a
 	add	a,6 (ix)
 	add	a,l
 	ld	l,a			; colonne < 32 : pas de retenue
-	ld	(sm_off),hl
+	ld	(_buf+136),hl
 	; ni decalage vertical ni horizontal : le caractere du bloc lui-meme
 	ld	a,8 (ix)
 	or	9 (ix)
 	jr	nz,sp_comp
-	ld	a,(sm_bot)
+	ld	a,(_buf+148)
 	jr	sp_store
 
 sp_comp:
 	; caractere de la banque, ecrit dans le tiers d'ecran de la case
-	ld	hl,(sm_bankp)
-	ld	a,(sm_n)
+	ld	hl,(_buf+128)
+	ld	a,(_buf+144)
 	ld	e,a
 	ld	d,#0
 	add	hl,de
 	ld	a,(hl)
-	ld	(sm_code),a
+	ld	(_buf+149),a
 	ld	l,a
 	ld	h,#0
 	add	hl,hl
 	add	hl,hl
 	add	hl,hl
-	ld	a,(sm_line)
+	ld	a,(_buf+150)
 	and	#0x18			; (ligne >> 3) << 3
 	add	a,h
 	ld	h,a
-	ld	(sm_vaddr),hl
-	ld	a,(sm_bot)
+	ld	(_buf+138),hl
+	ld	a,(_buf+148)
 	call	vblock
-	ld	(sm_hep),hl
-	ld	a,(sm_top)
+	ld	(_buf+142),hl
+	ld	a,(_buf+147)
 	call	vblock
-	ld	(sm_abp),hl
+	ld	(_buf+140),hl
 	; motif
-	ld	hl,(sm_vaddr)
+	ld	hl,(_buf+138)
 	call	vsetw
-	ld	hl,(sm_abp)
-	ld	de,(sm_hep)
+	ld	hl,(_buf+140)
+	ld	de,(_buf+142)
 	call	upl8
 	; couleur (8 octets plus loin dans les blocs virtuels)
-	ld	hl,(sm_vaddr)
+	ld	hl,(_buf+138)
 	ld	a,h
 	add	a,#COLTAB_H
 	ld	h,a
 	call	vsetw
 	ld	bc,#8
-	ld	hl,(sm_hep)
+	ld	hl,(_buf+142)
 	add	hl,bc
 	ex	de,hl
-	ld	hl,(sm_abp)
+	ld	hl,(_buf+140)
 	add	hl,bc
 	call	upl8
-	ld	a,(sm_code)
+	ld	a,(_buf+149)
 
 sp_store:
 	; a = caractere : liste d'ecritures et liste des cases affichees
 	push	af
-	ld	a,(sm_n)
+	ld	a,(_buf+144)
 	add	a,a
 	ld	e,a
 	ld	d,#0
 	ld	hl,#_smoothCellOff
 	add	hl,de
-	ld	de,(sm_off)
+	ld	de,(_buf+136)
 	ld	(hl),e
 	inc	hl
 	ld	(hl),d
 	pop	af
 	call	wl_put
-	ld	hl,#sm_n
+	ld	hl,#_buf+144
 	inc	(hl)
 
 sp_next:
-	ld	hl,#sm_pr
+	ld	hl,#_buf+146
 	inc	(hl)
 	ld	a,(hl)
 	cp	#7
 	jp	c,sp_row
 sp_colnext:
-	ld	hl,(sm_colp)
+	ld	hl,(_buf+134)
 	ld	de,#7
 	add	hl,de
-	ld	(sm_colp),hl
-	ld	hl,#sm_pc
+	ld	(_buf+134),hl
+	ld	hl,#_buf+145
 	inc	(hl)
 	ld	a,(hl)
 	cp	#7
 	jp	c,sp_col
 
-	ld	a,(sm_n)
+	ld	a,(_buf+144)
 	ld	(_smoothN),a
 	ld	a,#1
 	ld	(_smoothPending),a
@@ -370,6 +376,9 @@ _smooth_commit:
 	ld	b,a
 	ld	hl,#_buf+49
 	ld	c,#VDP_CTRL
+	; Sur le TMS9918A, le 1er octet d'adresse modifie tout de suite le registre
+	; d'adresse : il faut laisser a l'ecriture precedente le temps d'arriver en
+	; VRAM (jusqu'a 8 us = 29 T pendant l'affichage). Ici au moins 40 T.
 sc_loop:
 	ld	e,(hl)
 	inc	hl
@@ -380,14 +389,15 @@ sc_loop:
 	add	a,#CHRTAB_W
 	out	(c),a
 	ld	a,(hl)
-	out	(VDP_DATA),a
-	out	(c),e
-	ld	a,d
+	out	(VDP_DATA),a		; table affichee
+	ld	a,d			; 40 T avant le prochain octet d'adresse
 	add	a,#BUFTAB_W
-	out	(c),a
+	ld	d,a
 	ld	a,(hl)
-	out	(VDP_DATA),a
 	inc	hl
+	out	(c),e
+	out	(c),d
+	out	(VDP_DATA),a		; tampon ; 51 T jusqu'a l'adresse suivante
 	djnz	sc_loop
 	ret
 
@@ -456,14 +466,14 @@ cc_hit:
 
 ; Ajoute (de = decalage dans la table des noms, a = caractere) a la liste
 wl_put:
-	ld	hl,(sm_wlp)
+	ld	hl,(_buf+132)
 	ld	(hl),e
 	inc	hl
 	ld	(hl),d
 	inc	hl
 	ld	(hl),a
 	inc	hl
-	ld	(sm_wlp),hl
+	ld	(_buf+132),hl
 	ld	hl,#sm_wln
 	inc	(hl)
 	ret
@@ -478,7 +488,7 @@ vblock:
 	add	hl,hl
 	add	hl,hl
 	add	hl,hl
-	ld	de,(sm_tbase)
+	ld	de,(_buf+130)
 	add	hl,de
 	ret
 
@@ -524,20 +534,5 @@ upl_b:
 	ret
 
 	.area _DATA
-sm_bankp:	.ds 2
-sm_tbase:	.ds 2
-sm_wlp:		.ds 2
-sm_colp:	.ds 2
-sm_off:		.ds 2
-sm_vaddr:	.ds 2
-sm_abp:		.ds 2
-sm_hep:		.ds 2
-sm_n:		.ds 1
-sm_pc:		.ds 1
-sm_pr:		.ds 1
-sm_top:		.ds 1
-sm_bot:		.ds 1
-sm_code:	.ds 1
-sm_line:	.ds 1
 sm_wln:		.ds 1
 _smoothPending:	.ds 1
